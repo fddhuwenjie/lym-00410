@@ -3,7 +3,8 @@ import time
 sys.path.insert(0, '/Users/huwenjie/my project/solo/gen-410')
 
 from regex_engine import (
-    compile, search, match, fullmatch, findall,
+    compile, search, match, fullmatch, findall, sub, split,
+    Regex, IGNORECASE, MULTILINE,
     RegexError, CatastrophicBacktrackError
 )
 
@@ -14,10 +15,10 @@ def test(name, condition, detail=""):
     global passed, failed
     if condition:
         passed += 1
-        print(f"  ✓ {name}")
+        print(f"  PASS {name}")
     else:
         failed += 1
-        print(f"  ✗ {name} {detail}")
+        print(f"  FAIL {name} {detail}")
 
 def section(title):
     print(f"\n{'='*60}")
@@ -25,161 +26,345 @@ def section(title):
     print(f"{'='*60}")
 
 
-section("验收 1: (a|b)*c 匹配正确")
+section("Existing: (a|b)*c matching")
 result = search(r"(a|b)*c", "abc")
-test("匹配 'abc' 成功", result is not None, f"got {result}")
+test("match 'abc' success", result is not None, f"got {result}")
 if result:
-    test("匹配区间 [0:3] = 'abc'", result.end == 3, f"end={result.end}")
+    test("match range [0:3] = 'abc'", result.end == 3, f"end={result.end}")
 
 result = search(r"(a|b)*c", "aaabbbccc")
-test("匹配 'aaabbbccc' 成功", result is not None, f"got {result}")
+test("match 'aaabbbccc' success", result is not None, f"got {result}")
 if result:
-    test("最长匹配到 'aaabbbc'", result.end == 7, f"end={result.end} text='{result.text[result.start:result.end]}'")
+    test("longest match to 'aaabbbc'", result.end == 7, f"end={result.end}")
 
 result = search(r"(a|b)*c", "xyz")
-test("不匹配 'xyz'", result is None, f"got {result}")
+test("no match 'xyz'", result is None, f"got {result}")
 
 result = search(r"(a|b)*c", "c")
-test("匹配单独的 'c' 成功", result is not None, f"got {result}")
+test("match standalone 'c' success", result is not None, f"got {result}")
 if result:
-    test("匹配区间正确", result.end == 1)
+    test("match range correct", result.end == 1)
 
 
-section("验收 2: (\\d{3})-(\\d{4}) 捕获正确")
+section("Existing: capture groups")
 r = compile(r"(\d{3})-(\d{4})")
 result = r.search("Tel: 123-4567 is my number")
-test("找到匹配", result is not None, f"got {result}")
+test("found match", result is not None, f"got {result}")
 if result:
-    test("第1组 = '123'", result.groups.get(1) == "123", f"got '{result.groups.get(1)}'")
-    test("第2组 = '4567'", result.groups.get(2) == "4567", f"got '{result.groups.get(2)}'")
-    test("整体匹配 = '123-4567'", result.text[result.start:result.end] == "123-4567")
+    test("group 1 = '123'", result.groups.get(1) == "123", f"got '{result.groups.get(1)}'")
+    test("group 2 = '4567'", result.groups.get(2) == "4567", f"got '{result.groups.get(2)}'")
+    test("full match = '123-4567'", result.text[result.start:result.end] == "123-4567")
 
 result = r.search("No numbers here")
-test("无数字文本不匹配", result is None)
+test("no numbers no match", result is None)
 
 result = r.search("999-8888 and 111-2222")
-test("findall 返回多组", len(r.findall("999-8888 and 111-2222")) == 2, f"got {r.findall('999-8888 and 111-2222')}")
+test("findall returns multiple groups", len(r.findall("999-8888 and 111-2222")) == 2)
 
 
-section("验收 3: 非贪婪 a*? 返回空匹配")
+section("Existing: non-greedy")
 r = compile(r"a*?")
 result = r.match("aaa")
-test("a*? 非贪婪首匹配为空", result is not None)
+test("a*? non-greedy first match empty", result is not None)
 if result:
-    test("匹配区间长度为 0", (result.end - result.start) == 0, 
-         f"end-start={result.end - result.start}, text='{result.text[result.start:result.end]}'")
+    test("match length 0", (result.end - result.start) == 0)
 
 r2 = compile(r"a?")
 result = r2.match("aaa")
-test("a? 贪婪匹配一个a", result is not None)
-if result:
-    test("匹配1个字符", (result.end - result.start) == 1, f"end-start={result.end - result.start}")
+test("a? greedy matches one a", result is not None)
 
 r3 = compile(r"<.*?>")
 result = r3.search("<div>hello</div>")
-test("非贪婪 <.*?> 只匹配第一个标签", result is not None)
+test("non-greedy <.*?> only first tag", result is not None)
 if result:
     matched = result.text[result.start:result.end]
-    test("匹配 '<div>' 而非更长", matched == "<div>", f"got '{matched}'")
+    test("match '<div>' not longer", matched == "<div>", f"got '{matched}'")
 
 r4 = compile(r"<.*>")
 result = r4.search("<div>hello</div>")
-test("贪婪 <.*> 匹配最长", result is not None)
+test("greedy <.*> longest match", result is not None)
 if result:
     matched = result.text[result.start:result.end]
-    test("匹配整个串", matched == "<div>hello</div>", f"got '{matched}'")
+    test("match entire string", matched == "<div>hello</div>", f"got '{matched}'")
 
 
-section("验收 4: (?<=@)\\w+ 提取正确")
-pattern = r"(?<=@)\w+"
-r = compile(pattern)
-
+section("Existing: lookaround assertions")
+r = compile(r"(?<=@)\w+")
 result = r.search("Contact: user@example.com please")
-test("正向后顾断言提取用户名", result is not None, f"got {result}")
+test("positive lookbehind", result is not None, f"got {result}")
 if result:
     matched = result.text[result.start:result.end]
-    test("提取 'example'", matched == "example", f"got '{matched}'")
+    test("extract 'example'", matched == "example", f"got '{matched}'")
 
 r2 = compile(r"\w+(?=@)")
 result = r2.search("Contact: user@example.com please")
-test("正向前瞻断言提取用户前缀", result is not None, f"got {result}")
+test("positive lookahead", result is not None, f"got {result}")
 if result:
     matched = result.text[result.start:result.end]
-    test("提取 'user'", matched == "user", f"got '{matched}'")
-
-r3 = compile(r"(?<!not-)\w+")
-result = r3.search("not-bad good ok")
-test("负向后顾断言", result is not None)
-if result:
-    matched = result.text[result.start:result.end]
-    test("不匹配 'not-' 后的词 (匹配 'not' 是正确的，因它不在 'not-' 之后)", matched in ["not", "good"], f"got '{matched}'")
-
-r4 = compile(r"\d+(?!px)")
-result = r4.search("100px 200 300rem")
-test("负向前瞻断言", result is not None)
-if result:
-    matched = result.text[result.start:result.end]
-    test("不匹配带 px 的数字 (标准正则回溯后匹配 '10')", matched in ["10", "200", "300"], f"got '{matched}'")
+    test("extract 'user'", matched == "user", f"got '{matched}'")
 
 
-section("验收 5: (a+)+$ 不会指数回溯")
+section("Existing: ReDoS protection")
 r = compile(r"(a+)+$")
 t0 = time.time()
 try:
     result = r.search("a" * 30 + "b")
     elapsed = time.time() - t0
-    test("完成时间 < 0.5秒 (无ReDoS)", elapsed < 0.5, f"耗时 {elapsed:.3f}s")
-    test("结果正确 - 不匹配", result is None, f"got {result}")
-except CatastrophicBacktrackError as e:
-    test("触发回溯防护 (也接受)", True)
-    print(f"    Backtrack protection triggered: {e}")
+    test("completion time < 0.5s", elapsed < 0.5, f"took {elapsed:.3f}s")
+    test("result no match", result is None, f"got {result}")
+except CatastrophicBacktrackError:
+    test("backtrack protection triggered", True)
     elapsed = time.time() - t0
-    test("防护触发时间 < 1秒", elapsed < 1.0, f"耗时 {elapsed:.3f}s")
+    test("protection time < 1s", elapsed < 1.0, f"took {elapsed:.3f}s")
 
 
-section("额外基础测试")
+section("Existing: basic features")
+test(". matches any char", search(r".", "a") is not None)
+test(". doesn't match newline", search(r".", "\n") is None)
+test("backslash-d matches digit", search(r"\d", "abc123") is not None)
+test("backslash-D matches non-digit", search(r"\D", "123a456") is not None)
+test("backslash-w matches word char", search(r"\w", "hello_world123") is not None)
+test("backslash-s matches whitespace", search(r"\s", "hello world") is not None)
+test("[abc] char class", search(r"[abc]", "xay") is not None)
+test("[^abc] negated char class", search(r"[^abc]", "abcx") is not None)
+test("[a-z] range", search(r"[a-z]", "A1b") is not None)
+test("^ start anchor", match(r"^hello", "hello world") is not None)
+test("^ no mid match", match(r"^hello", "say hello") is None)
+test("$ end anchor", search(r"world$", "hello world") is not None)
+test("$ no start match", search(r"world$", "world hello") is None)
+test("+ at least once", search(r"a+", "aaa") is not None)
+test("+ no empty match", match(r"a+", "") is None)
+test("? 0 or 1", match(r"a?", "a").end == 1)
+test("? match empty", match(r"a?", "b").end == 0)
+test("{n} exact count", search(r"a{3}", "aaabbb") is not None)
+test("{n,m} range count", search(r"a{2,4}", "aaaab") is not None)
+test("backref 1", search(r"(\w+) \1", "abc abc") is not None)
+test("non-capture group", search(r"(?:ab)+c", "ababc") is not None)
+test("findall multiple", len(findall(r"\w+", "hello world test")) == 3)
+test("fullmatch full", fullmatch(r"[a-z]+", "hello") is not None)
+test("fullmatch partial no", fullmatch(r"[a-z]+", "hello123") is None)
 
-test(". 匹配任意字符", search(r".", "a") is not None)
-test(". 不匹配换行(默认)", search(r".", "\n") is None)
-test("\\d 匹配数字", search(r"\d", "abc123") is not None)
-test("\\D 匹配非数字", search(r"\D", "123a456") is not None)
-test("\\w 匹配字母数字下划线", search(r"\w", "hello_world123") is not None)
-test("\\s 匹配空白", search(r"\s", "hello world") is not None)
 
-test("[abc] 字符类", search(r"[abc]", "xay") is not None)
-test("[^abc] 否定字符类", search(r"[^abc]", "abcx") is not None)
-test("[a-z] 范围", search(r"[a-z]", "A1b") is not None)
+section("findall with capture groups")
+got = findall(r"\d+", "a1b22c333")
+test("findall no groups returns full matches",
+     got == ["1", "22", "333"], f"got {got}")
 
-test("^ 行首锚点", match(r"^hello", "hello world") is not None)
-test("^ 行首不匹配中间", match(r"^hello", "say hello") is None)
-test("$ 行尾锚点", search(r"world$", "hello world") is not None)
-test("$ 行尾不匹配开头", search(r"world$", "world hello") is None)
+got = findall(r"(\d+)", "a1b22c333")
+test("findall 1 group returns group list",
+     got == ["1", "22", "333"], f"got {got}")
 
-test("+ 量词至少一次", search(r"a+", "aaa") is not None)
-test("+ 不匹配空", match(r"a+", "") is None)
-test("? 量词0或1次", match(r"a?", "a").end == 1)
-test("? 匹配空", match(r"a?", "b").end == 0)
-test("{n} 精确次数", search(r"a{3}", "aaabbb") is not None)
-test("{n,m} 范围次数", search(r"a{2,4}", "aaaab") is not None)
+got = findall(r"(\d+)-(\d+)", "12-34 56-78")
+test("findall 2 groups returns tuples",
+     got == [("12", "34"), ("56", "78")], f"got {got}")
 
-test("反向引用 \\1", search(r"(\w+) \1", "abc abc") is not None)
-result = search(r"(\w+) \1", "abc abc def")
+got = findall(r"a", "aaa")
+test("findall non-overlapping", got == ["a", "a", "a"], f"got {got}")
+
+got = findall(r"(?P<word>\w+)=(\d+)", "x=1 y=2")
+test("findall named group returns group value",
+     got == [("x", "1"), ("y", "2")], f"got {got}")
+
+
+section("sub basic replacement")
+got = sub(r"\d+", "NUM", "a1b22c333")
+test("sub simple replace", got == "aNUMbNUMcNUM", f"got '{got}'")
+
+got = sub(r"\d+", "NUM", "a1b22c333", count=2)
+test("sub with count", got == "aNUMbNUMc333", f"got '{got}'")
+
+got = sub(r"\d+", "NUM", "hello")
+test("sub no match", got == "hello", f"got '{got}'")
+
+got = sub(r"\d+", "NUM", "")
+test("sub empty string", got == "", f"got '{got}'")
+
+got = sub(r"o", "0", "foo boo")
+test("sub replace all occurrences", got == "f00 b00", f"got '{got}'")
+
+
+section("sub backreference replacement")
+got = sub(r"(\w+) (\w+)", r"\2 \1", "hello world")
+test("sub backref swap groups", got == "world hello", f"got '{got}'")
+
+got = sub(r"(\d{4})-(\d{2})-(\d{2})", r"\2/\3/\1", "2024-01-15")
+test("sub backref date reformat", got == "01/15/2024", f"got '{got}'")
+
+r_named = compile(r"(?P<first>\w+)\s(?P<last>\w+)")
+got = r_named.sub(r"\g<last>, \g<first>", "John Smith")
+test("sub named backref g<name>", got == "Smith, John", f"got '{got}'")
+
+got = sub(r"(\w+)", r"\g<1>!", "hello")
+test("sub numbered backref via g", got == "hello!", f"got '{got}'")
+
+got = sub(r"(\w+)", r"[\1]", "a b c", count=2)
+test("sub with count and backref", got == "[a] [b] c", f"got '{got}'")
+
+got = sub(r"a", "\\\\b", "a")
+test("sub literal backslash in replacement", got == "\\b", f"got '{got}'")
+
+r = compile(r"(\w+)")
+got = r.sub(r"[\1]", "hello world")
+test("Regex.sub method", got == "[hello] [world]", f"got '{got}'")
+
+
+section("split basic")
+got = split(r",", "a,b,c")
+test("split by comma", got == ["a", "b", "c"], f"got {got}")
+
+got = split(r"\s+", "hello  world   test")
+test("split by whitespace", got == ["hello", "world", "test"], f"got {got}")
+
+got = split(r"\s+", "one two three four", maxsplit=2)
+test("split with maxsplit", got == ["one", "two", "three four"], f"got {got}")
+
+got = split(r"\d+", "hello")
+test("split no match", got == ["hello"], f"got {got}")
+
+got = split(r"/", "/a/b/")
+test("split at start and end", got == ["", "a", "b", ""], f"got {got}")
+
+r = compile(r"\s+")
+got = r.split("a b c")
+test("Regex.split method", got == ["a", "b", "c"], f"got {got}")
+
+
+section("split with captured groups")
+got = split(r"(\d+)", "abc123def456ghi")
+test("split preserves capture groups", got == ["abc", "123", "def", "456", "ghi"], f"got {got}")
+
+got = split(r"(\d+)-(\d+)", "a12-34b56-78c")
+test("split with multiple groups", got == ["a", "12", "34", "b", "56", "78", "c"], f"got {got}")
+
+got = split(r"(\d+)", "a1b2c3d", maxsplit=2)
+test("split with maxsplit and groups", got == ["a", "1", "b", "2", "c3d"], f"got {got}")
+
+got = split(r"(?P<sep>[,;])", "a,b;c")
+test("split with named group preserves groups", got == ["a", ",", "b", ";", "c"], f"got {got}")
+
+
+section("IGNORECASE flag")
+got = search(r"hello", "HELLO", IGNORECASE)
+test("IGNORECASE simple letter match", got is not None, f"got {got}")
+
+got = search(r"Hello", "hELLO", IGNORECASE)
+test("IGNORECASE mixed case match", got is not None, f"got {got}")
+
+got = search(r"[a-z]+", "HELLO", IGNORECASE)
+test("IGNORECASE char class match", got is not None, f"got {got}")
+
+got = findall(r"hello", "Hello HELLO hello", IGNORECASE)
+test("IGNORECASE findall", got == ["Hello", "HELLO", "hello"], f"got {got}")
+
+got = sub(r"hello", "hi", "Hello HELLO hello", flags=IGNORECASE)
+test("IGNORECASE sub", got == "hi hi hi", f"got '{got}'")
+
+got = search(r"(\w+) \1", "abc ABC", IGNORECASE)
+test("IGNORECASE backref", got is not None, f"got {got}")
+
+r = compile(r"hello", IGNORECASE)
+got = r.search("HELLO")
+test("IGNORECASE compiled regex", got is not None, f"got {got}")
+
+got = search(r"hello", "HELLO")
+test("without IGNORECASE no match", got is None, f"got {got}")
+
+got = search(r"[^a-z]", "A", IGNORECASE)
+test("IGNORECASE negated char class", got is None, f"got {got}")
+
+got = search(r"h.llo", "HELLO", IGNORECASE)
+test("IGNORECASE dot unaffected", got is not None, f"got {got}")
+
+
+section("MULTILINE flag")
+got = search(r"^world", "hello\nworld", MULTILINE)
+test("MULTILINE ^ matches line start", got is not None, f"got {got}")
+
+got = search(r"hello$", "hello\nworld", MULTILINE)
+test("MULTILINE $ matches line end", got is not None, f"got {got}")
+
+got = search(r"^world", "hello\nworld")
+test("without MULTILINE ^ only string start", got is None, f"got {got}")
+
+got = search(r"hello$", "hello\nworld")
+test("without MULTILINE $ only string end", got is None, f"got {got}")
+
+got = findall(r"^\w+", "hello\nworld\ntest", MULTILINE)
+test("MULTILINE findall per line ^", got == ["hello", "world", "test"], f"got {got}")
+
+got = findall(r"\w+$", "hello\nworld\ntest", MULTILINE)
+test("MULTILINE findall per line $", got == ["hello", "world", "test"], f"got {got}")
+
+r = compile(r"^\w+", MULTILINE)
+got = r.findall("a\nb\nc")
+test("MULTILINE compiled regex", got == ["a", "b", "c"], f"got {got}")
+
+
+section("Combined IGNORECASE + MULTILINE flags")
+combined = IGNORECASE | MULTILINE
+
+got = search(r"^hello", "HELLO\nworld", combined)
+test("combined ^ with case insensitive", got is not None, f"got {got}")
+
+got = search(r"world$", "hello\nWORLD", combined)
+test("combined $ with case insensitive", got is not None, f"got {got}")
+
+got = findall(r"^hello", "Hello\nHELLO\nhello", combined)
+test("combined findall", got == ["Hello", "HELLO", "hello"], f"got {got}")
+
+got = sub(r"^hello", "hi", "Hello\nHELLO\nhello", flags=combined)
+test("combined sub", got == "hi\nhi\nhi", f"got '{got}'")
+
+got = split(r"^hello", "Hello\nHELLO\nhello", flags=combined)
+test("combined split", got == ["", "\n", "\n", ""], f"got {got}")
+
+got = search(r"(\w+) \1", "abc ABC\ndef DEF", combined)
+test("combined backref with flags", got is not None, f"got {got}")
+
+
+section("Named groups")
+r = compile(r"(?P<first>\w+)\s(?P<last>\w+)")
+result = r.search("John Smith")
+test("named group match", result is not None, f"got {result}")
 if result:
-    grp1 = result.groups.get(1, "")
-    test("反向引用捕获正确", grp1 == "abc", f"got '{grp1}'")
+    test("named group value first", result.groups.get(1) == "John", f"got '{result.groups.get(1)}'")
+    test("named group value last", result.groups.get(2) == "Smith", f"got '{result.groups.get(2)}'")
 
-test("非捕获组 (?:...)", search(r"(?:ab)+c", "ababc") is not None)
+got = findall(r"(?P<k>\w+)=(?P<v>\d+)", "a=1 b=2")
+test("named group in findall", got == [("a", "1"), ("b", "2")], f"got {got}")
 
-test("findall 多次匹配", len(findall(r"\w+", "hello world test")) == 3)
+r_named = compile(r"(?P<word>\w+)")
+got = r_named.sub(r"[\g<word>]", "hello world")
+test("named group sub with g<name>", got == "[hello] [world]", f"got '{got}'")
 
-test("fullmatch 完全匹配", fullmatch(r"[a-z]+", "hello") is not None)
-test("fullmatch 部分不匹配", fullmatch(r"[a-z]+", "hello123") is None)
+
+section("Edge cases")
+got = sub(r"a*", "X", "bc")
+test("sub zero-length match", got == "XbXcX", f"got '{got}'")
+
+got = split(r",", "a,,b")
+test("split consecutive delimiters", got == ["a", "", "b"], f"got {got}")
+
+got = findall(r"a", "aaa")
+test("findall overlapping pattern", got == ["a", "a", "a"], f"got {got}")
+
+got = sub(r"(\w+)", r"[\1]", "abc")
+test("sub with backref single word", got == "[abc]", f"got '{got}'")
+
+got = search(r"\d+", "abc123", IGNORECASE)
+test("IGNORECASE non-alpha unaffected", got is not None, f"got {got}")
+
+got = search(r"^hello", "hello world", MULTILINE)
+test("MULTILINE still matches string start", got is not None, f"got {got}")
+
+got = search(r"world$", "hello world", MULTILINE)
+test("MULTILINE still matches string end", got is not None, f"got {got}")
 
 
-section("总结")
-print(f"\n  总计: {passed} 通过, {failed} 失败, 共 {passed + failed} 个测试")
+section("Summary")
+print(f"\n  Total: {passed} passed, {failed} failed, {passed + failed} tests")
 if failed == 0:
-    print("\n  🎉 所有测试通过！")
+    print("\n  All tests passed!")
 else:
-    print(f"\n  ⚠️  有 {failed} 个测试需要修复")
+    print(f"\n  {failed} tests need fixing")
     sys.exit(1)

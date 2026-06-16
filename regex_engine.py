@@ -11,6 +11,9 @@ MAX_STATES = 50000
 MAX_BACKTRACK_STEPS = 200000
 STATE_COUNT_LIMIT = 10000
 
+IGNORECASE = 2
+MULTILINE = 8
+
 
 class RegexError(Exception):
     pass
@@ -29,8 +32,9 @@ class Token:
 
 (
     CHAR, DOT, STAR, PLUS, QUESTION, OR, LPAREN, RPAREN, LBRACKET, RBRACKET,
-    CARET, DOLLAR, BACKREF, LBRACE, RBRACE, COMMA, COLON, EQUAL, EXCLAIM, LESS
-) = range(20)
+    CARET, DOLLAR, BACKREF, LBRACE, RBRACE, COMMA, COLON, EQUAL, EXCLAIM, LESS,
+    GREAT, P, GREATER
+) = range(23)
 
 
 class Tokenizer:
@@ -151,6 +155,20 @@ class Tokenizer:
                     elif not self.at_end() and self.peek() == "!":
                         self.tokens.append(Token(type=EXCLAIM, value="!", pos=self.pos))
                         self.advance()
+                    elif not self.at_end() and self.peek() == "P":
+                        self.tokens.append(Token(type=P, value="P", pos=self.pos))
+                        self.advance()
+                        if not self.at_end() and self.peek() == "<":
+                            self.tokens.append(Token(type=LESS, value="<", pos=self.pos))
+                            self.advance()
+                            name = ""
+                            while not self.at_end() and self.peek() != ">":
+                                name += self.advance()
+                            if name:
+                                self.tokens.append(Token(type=CHAR, value=name, pos=self.pos))
+                            if not self.at_end() and self.peek() == ">":
+                                self.tokens.append(Token(type=GREATER, value=">", pos=self.pos))
+                                self.advance()
                     elif not self.at_end() and self.peek() == "<":
                         self.tokens.append(Token(type=LESS, value="<", pos=self.pos))
                         self.advance()
@@ -257,6 +275,7 @@ class RepeatNode(ASTNode):
 class CaptureGroupNode(ASTNode):
     child: ASTNode
     group_num: int
+    group_name: Optional[str] = None
 
 
 @dataclass
@@ -291,6 +310,7 @@ class Parser:
         self.tokens = tokens
         self.pos = 0
         self.group_counter = 0
+        self.group_name_map: Dict[str, int] = {}
         self.has_backref = False
         self.has_assertion = False
         self.has_lookaround = False
@@ -485,6 +505,16 @@ class Parser:
         non_capture = False
         lookahead_positive = None
         lookbehind_positive = None
+        group_name = None
+
+        if not self.at_end() and self.peek().type == P:
+            self.advance()
+            if not self.at_end() and self.peek().type == LESS:
+                self.advance()
+                if not self.at_end() and self.peek().type == CHAR:
+                    group_name = self.advance().value
+                if not self.at_end() and self.peek().type == GREATER:
+                    self.advance()
 
         if not self.at_end() and self.peek().type == COLON:
             non_capture = True
@@ -521,7 +551,10 @@ class Parser:
             return NonCaptureGroupNode(child=child)
 
         self.group_counter += 1
-        return CaptureGroupNode(child=child, group_num=self.group_counter)
+        node = CaptureGroupNode(child=child, group_num=self.group_counter, group_name=group_name)
+        if group_name is not None:
+            self.group_name_map[group_name] = self.group_counter
+        return node
 
 
 @dataclass
@@ -794,7 +827,7 @@ def matches_special(special: str, ch: str) -> bool:
     return False
 
 
-def matches_transition(trans_char: str, ch: str) -> bool:
+def _matches_transition_inner(trans_char: str, ch: str) -> bool:
     if trans_char.startswith("__CC"):
         negate = trans_char.startswith("__CCN")
         parts = trans_char.split("__")
@@ -812,6 +845,33 @@ def matches_transition(trans_char: str, ch: str) -> bool:
     if trans_char.startswith("\\") and len(trans_char) == 2:
         return matches_special(trans_char, ch)
     return trans_char == ch
+
+
+def matches_transition(trans_char: str, ch: str, flags: int = 0) -> bool:
+    if trans_char.startswith("__CC") and (flags & IGNORECASE):
+        negate = trans_char.startswith("__CCN")
+        parts = trans_char.split("__")
+        if len(parts) >= 5:
+            a = parts[2]
+            b = parts[3]
+            def _cc_pos(c):
+                if len(a) == 1 and len(b) == 1:
+                    return a <= c <= b
+                return c == a or c == b
+            pos_orig = _cc_pos(ch)
+            alt_ch = ch.lower() if ch.isupper() else ch.upper() if ch.islower() else ch
+            pos_alt = _cc_pos(alt_ch) if alt_ch != ch else pos_orig
+            pos_match = pos_orig or pos_alt
+            return (not pos_match) if negate else pos_match
+        return False
+    result = _matches_transition_inner(trans_char, ch)
+    if result:
+        return True
+    if flags & IGNORECASE:
+        alt_ch = ch.lower() if ch.isupper() else ch.upper() if ch.islower() else ch
+        if alt_ch != ch:
+            return _matches_transition_inner(trans_char, alt_ch)
+    return False
 
 
 @dataclass
@@ -854,11 +914,19 @@ class MatchResult:
         return f"<MatchResult: {grps}>"
 
 
-def check_assertion_simple(kind: str, text: str, pos: int) -> bool:
+def check_assertion_simple(kind: str, text: str, pos: int, flags: int = 0) -> bool:
     if kind == "start":
-        return pos == 0
+        if pos == 0:
+            return True
+        if flags & MULTILINE and pos > 0 and text[pos - 1] == '\n':
+            return True
+        return False
     if kind == "end":
-        return pos == len(text)
+        if pos == len(text):
+            return True
+        if flags & MULTILINE and pos < len(text) and text[pos] == '\n':
+            return True
+        return False
     if kind == "word_boundary":
         prev = text[pos - 1] if pos > 0 else None
         curr = text[pos] if pos < len(text) else None
@@ -870,7 +938,7 @@ def check_assertion_simple(kind: str, text: str, pos: int) -> bool:
     return True
 
 
-def try_match_lookahead(nfa: NFA, text: str, pos: int, state_map: Dict[int, NFAState]) -> bool:
+def try_match_lookahead(nfa: NFA, text: str, pos: int, state_map: Dict[int, NFAState], flags: int = 0) -> bool:
     visited: Set[Tuple[int, int]] = set()
     stack = [(nfa.start.id, pos)]
 
@@ -892,11 +960,11 @@ def try_match_lookahead(nfa: NFA, text: str, pos: int, state_map: Dict[int, NFAS
             pass
 
         if state.assertion:
-            if not check_assertion_simple(state.assertion, text, p):
+            if not check_assertion_simple(state.assertion, text, p, flags):
                 continue
 
         if state.lookahead_nfa is not None:
-            ok = try_match_lookahead(state.lookahead_nfa, text, p, collect_state_map(state.lookahead_nfa.start))
+            ok = try_match_lookahead(state.lookahead_nfa, text, p, collect_state_map(state.lookahead_nfa.start), flags)
             if state.lookahead_positive and not ok:
                 continue
             if (not state.lookahead_positive) and ok:
@@ -908,22 +976,22 @@ def try_match_lookahead(nfa: NFA, text: str, pos: int, state_map: Dict[int, NFAS
         if p < len(text):
             ch = text[p]
             for trans_char, targets in state.transitions.items():
-                if matches_transition(trans_char, ch):
+                if matches_transition(trans_char, ch, flags):
                     for t in targets:
                         stack.append((t.id, p + 1))
 
     return False
 
 
-def try_match_lookbehind(nfa: NFA, text: str, pos: int, state_map: Dict[int, NFAState]) -> bool:
+def try_match_lookbehind(nfa: NFA, text: str, pos: int, state_map: Dict[int, NFAState], flags: int = 0) -> bool:
     for start_p in range(pos, -1, -1):
-        if try_match_exact(nfa, text, start_p, pos, state_map):
+        if try_match_exact(nfa, text, start_p, pos, state_map, flags):
             return True
     return False
 
 
 def try_match_exact(nfa: NFA, text: str, start_pos: int, end_pos: int,
-                    state_map: Dict[int, NFAState]) -> bool:
+                    state_map: Dict[int, NFAState], flags: int = 0) -> bool:
     visited: Set[Tuple[int, int]] = set()
     stack = [(nfa.start.id, start_pos)]
 
@@ -945,7 +1013,7 @@ def try_match_exact(nfa: NFA, text: str, start_pos: int, end_pos: int,
             return True
 
         if state.assertion:
-            if not check_assertion_simple(state.assertion, text, p):
+            if not check_assertion_simple(state.assertion, text, p, flags):
                 continue
 
         for ep in state.epsilon:
@@ -954,7 +1022,7 @@ def try_match_exact(nfa: NFA, text: str, start_pos: int, end_pos: int,
         if p < len(text):
             ch = text[p]
             for trans_char, targets in state.transitions.items():
-                if matches_transition(trans_char, ch):
+                if matches_transition(trans_char, ch, flags):
                     for t in targets:
                         stack.append((t.id, p + 1))
 
@@ -962,7 +1030,7 @@ def try_match_exact(nfa: NFA, text: str, start_pos: int, end_pos: int,
 
 
 def backtrack_search(text: str, nfa: NFA, start_pos: int,
-                     state_map: Dict[int, NFAState]) -> Optional[Tuple[int, Dict[int, Tuple[int, int]]]]:
+                     state_map: Dict[int, NFAState], flags: int = 0) -> Optional[Tuple[int, Dict[int, Tuple[int, int]]]]:
     ctx = BacktrackCtx(text=text, state_map=state_map)
 
     initial_groups: Dict[int, Tuple[int, int]] = {}
@@ -999,12 +1067,12 @@ def backtrack_search(text: str, nfa: NFA, start_pos: int,
                 new_groups[gn] = (pos, pos)
 
         if state.assertion:
-            if not check_assertion_simple(state.assertion, text, pos):
+            if not check_assertion_simple(state.assertion, text, pos, flags):
                 return None
 
         if state.lookahead_nfa is not None:
             lm = collect_state_map(state.lookahead_nfa.start)
-            ok = try_match_lookahead(state.lookahead_nfa, text, pos, lm)
+            ok = try_match_lookahead(state.lookahead_nfa, text, pos, lm, flags)
             if state.lookahead_positive and not ok:
                 return None
             if (not state.lookahead_positive) and ok:
@@ -1012,7 +1080,7 @@ def backtrack_search(text: str, nfa: NFA, start_pos: int,
 
         if state.lookbehind_nfa is not None:
             lm = collect_state_map(state.lookbehind_nfa.start)
-            ok = try_match_lookbehind(state.lookbehind_nfa, text, pos, lm)
+            ok = try_match_lookbehind(state.lookbehind_nfa, text, pos, lm, flags)
             if state.lookbehind_positive and not ok:
                 return None
             if (not state.lookbehind_positive) and ok:
@@ -1024,7 +1092,8 @@ def backtrack_search(text: str, nfa: NFA, start_pos: int,
                 gs, ge = new_groups[bn]
                 expected = text[gs:ge]
                 advance = len(expected)
-                if text[pos:pos + advance] == expected:
+                captured = text[pos:pos + advance]
+                if captured == expected or ((flags & IGNORECASE) and captured.lower() == expected.lower()):
                     for ep in state.epsilon:
                         result = recurse(ep.id, pos + advance, new_groups)
                         if result is not None:
@@ -1045,7 +1114,7 @@ def backtrack_search(text: str, nfa: NFA, start_pos: int,
         if pos < len(text):
             ch = text[pos]
             for trans_char, targets in state.transitions.items():
-                if matches_transition(trans_char, ch):
+                if matches_transition(trans_char, ch, flags):
                     for t in targets:
                         result = recurse(t.id, pos + 1, new_groups)
                         if result is not None:
@@ -1057,8 +1126,9 @@ def backtrack_search(text: str, nfa: NFA, start_pos: int,
 
 
 class Regex:
-    def __init__(self, pattern: str):
+    def __init__(self, pattern: str, flags: int = 0):
         self.pattern = pattern
+        self.flags = flags
         tokenizer = Tokenizer(pattern)
         self.tokens = tokenizer.tokenize()
         self.parser = Parser(self.tokens)
@@ -1068,6 +1138,7 @@ class Regex:
         self.nfa.end.is_final = True
         self.state_map = collect_state_map(self.nfa.start)
         self.num_groups = self.parser.group_counter
+        self.group_name_map = self.parser.group_name_map
         self.needs_backtrack = (
             self.parser.has_backref
             or self.parser.has_lookaround
@@ -1111,9 +1182,103 @@ class Regex:
                 i += 1
         return results
 
+    def _parse_replacement(self, replacement: str, groups: Dict[int, str]) -> str:
+        result = []
+        i = 0
+        while i < len(replacement):
+            if replacement[i] == '\\' and i + 1 < len(replacement):
+                next_ch = replacement[i + 1]
+                if next_ch.isdigit():
+                    num_str = next_ch
+                    i += 2
+                    while i < len(replacement) and replacement[i].isdigit():
+                        num_str += replacement[i]
+                        i += 1
+                    num = int(num_str)
+                    result.append(groups.get(num, ''))
+                elif next_ch == 'g' and i + 2 < len(replacement) and replacement[i + 2] == '<':
+                    i += 3
+                    name = ''
+                    while i < len(replacement) and replacement[i] != '>':
+                        name += replacement[i]
+                        i += 1
+                    if i < len(replacement):
+                        i += 1
+                    if name.isdigit():
+                        result.append(groups.get(int(name), ''))
+                    else:
+                        group_num = self.group_name_map.get(name)
+                        if group_num is not None:
+                            result.append(groups.get(group_num, ''))
+                elif next_ch == '\\':
+                    result.append('\\')
+                    i += 2
+                else:
+                    result.append(next_ch)
+                    i += 2
+            else:
+                result.append(replacement[i])
+                i += 1
+        return ''.join(result)
+
+    def sub(self, replacement: str, text: str, count: int = 0) -> str:
+        result = []
+        pos = 0
+        num_subs = 0
+        while pos <= len(text):
+            match_obj = None
+            for i in range(pos, len(text) + 1):
+                match_obj = self._match_at(text, i)
+                if match_obj is not None:
+                    break
+            if match_obj is None:
+                break
+            result.append(text[pos:match_obj.start])
+            groups = dict(match_obj.groups)
+            groups[0] = text[match_obj.start:match_obj.end]
+            result.append(self._parse_replacement(replacement, groups))
+            num_subs += 1
+            if match_obj.end > pos:
+                pos = match_obj.end
+            else:
+                if pos < len(text):
+                    result.append(text[pos])
+                pos = match_obj.end + 1
+            if count > 0 and num_subs >= count:
+                break
+        result.append(text[pos:])
+        return ''.join(result)
+
+    def split(self, text: str, maxsplit: int = 0) -> list:
+        result = []
+        pos = 0
+        num_splits = 0
+        while pos <= len(text):
+            match_obj = None
+            for i in range(pos, len(text) + 1):
+                match_obj = self._match_at(text, i)
+                if match_obj is not None:
+                    break
+            if match_obj is None:
+                break
+            if maxsplit > 0 and num_splits >= maxsplit:
+                break
+            result.append(text[pos:match_obj.start])
+            for g in range(1, self.num_groups + 1):
+                result.append(match_obj.groups.get(g, None))
+            num_splits += 1
+            if match_obj.end > pos:
+                pos = match_obj.end
+            else:
+                if pos < len(text):
+                    result.append(text[pos])
+                pos = match_obj.end + 1
+        result.append(text[pos:])
+        return result
+
     def _match_at(self, text: str, start_pos: int) -> Optional[MatchResult]:
         if self.needs_backtrack:
-            result = backtrack_search(text, self.nfa, start_pos, self.state_map)
+            result = backtrack_search(text, self.nfa, start_pos, self.state_map, self.flags)
             if result is None:
                 return None
             end_pos, grp_ranges = result
@@ -1177,12 +1342,12 @@ class Regex:
                     new_groups[gn] = (pos, pos)
 
             if state.assertion:
-                if not check_assertion_simple(state.assertion, text, pos):
+                if not check_assertion_simple(state.assertion, text, pos, self.flags):
                     continue
 
             if state.lookahead_nfa is not None:
                 lm = collect_state_map(state.lookahead_nfa.start)
-                ok = try_match_lookahead(state.lookahead_nfa, text, pos, lm)
+                ok = try_match_lookahead(state.lookahead_nfa, text, pos, lm, self.flags)
                 if state.lookahead_positive and not ok:
                     continue
                 if (not state.lookahead_positive) and ok:
@@ -1200,7 +1365,7 @@ class Regex:
             if pos < len(text):
                 ch = text[pos]
                 for trans_char, targets in state.transitions.items():
-                    if matches_transition(trans_char, ch):
+                    if matches_transition(trans_char, ch, self.flags):
                         for t in targets:
                             queue.append((t.id, pos + 1, dict(new_groups)))
 
@@ -1214,21 +1379,29 @@ class Regex:
         return None
 
 
-def compile(pattern: str) -> Regex:
-    return Regex(pattern)
+def compile(pattern: str, flags: int = 0) -> Regex:
+    return Regex(pattern, flags)
 
 
-def match(pattern: str, text: str) -> Optional[MatchResult]:
-    return Regex(pattern).match(text)
+def match(pattern: str, text: str, flags: int = 0) -> Optional[MatchResult]:
+    return Regex(pattern, flags).match(text)
 
 
-def search(pattern: str, text: str) -> Optional[MatchResult]:
-    return Regex(pattern).search(text)
+def search(pattern: str, text: str, flags: int = 0) -> Optional[MatchResult]:
+    return Regex(pattern, flags).search(text)
 
 
-def fullmatch(pattern: str, text: str) -> Optional[MatchResult]:
-    return Regex(pattern).fullmatch(text)
+def fullmatch(pattern: str, text: str, flags: int = 0) -> Optional[MatchResult]:
+    return Regex(pattern, flags).fullmatch(text)
 
 
-def findall(pattern: str, text: str) -> List:
-    return Regex(pattern).findall(text)
+def findall(pattern: str, text: str, flags: int = 0) -> List:
+    return Regex(pattern, flags).findall(text)
+
+
+def sub(pattern: str, replacement: str, text: str, count: int = 0, flags: int = 0) -> str:
+    return Regex(pattern, flags).sub(replacement, text, count)
+
+
+def split(pattern: str, text: str, maxsplit: int = 0, flags: int = 0) -> list:
+    return Regex(pattern, flags).split(text, maxsplit)
